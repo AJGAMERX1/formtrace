@@ -1,7 +1,63 @@
 import assert from 'node:assert/strict';
+import { createReadStream } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { createInterface } from 'node:readline';
 import { chromium, webkit } from 'playwright';
 import { createServer } from 'vite';
+
+// Stream the faceted CAD export so validation stays bounded on dense flocks.
+async function validateStep(path, nodeNames, sourceTriangles) {
+  const file = createReadStream(path, { encoding: 'utf8' });
+  const lines = createInterface({ input: file, crlfDelay: Infinity });
+  const productNames = new Set();
+  const real = String.raw`([+-]?(?:\d+\.\d*|\.\d+)(?:E[+-]?\d+)?)`;
+  const xyz = new RegExp(String.raw`^#\d+=(?:CARTESIAN_POINT|DIRECTION)\('',\(${real},${real},${real}\)\);$`);
+  let header = '', inData = false, mm = false, faces = 0, points = 0;
+  let previous = '', last = '';
+  try {
+    for await (const line of lines) {
+      if (!line) continue;
+      previous = last;
+      last = line;
+      if (!inData) {
+        header += line + '\n';
+        assert(header.length < 32768, 'Missing STEP header terminator');
+        inData = line === 'DATA;';
+        continue;
+      }
+      if (/NaN|Infinity|undefined/i.test(line)) assert.fail('STEP contains an invalid value: ' + line.slice(0, 100));
+      if (line.includes('=FACE_SURFACE(') || line.includes('=ADVANCED_FACE(')) faces++;
+      else if (line.includes('=CARTESIAN_POINT(') || line.includes('=DIRECTION(')) {
+        const coord = xyz.exec(line);
+        if (!coord || ![coord[1], coord[2], coord[3]].every(n => Number.isFinite(Number(n)))) {
+          assert.fail('Invalid STEP XYZ triple: ' + line.slice(0, 100));
+        }
+        if (line.includes('=CARTESIAN_POINT(')) points++;
+      } else if (line.includes('=PRODUCT(')) {
+        const name = line.match(/=PRODUCT\('([^']+)'/)?.[1];
+        assert(name && !productNames.has(name), 'STEP product names must be present and unique');
+        productNames.add(name);
+      } else if (line.includes('LENGTH_UNIT() NAMED_UNIT(*) SI_UNIT(.MILLI.,.METRE.)')) mm = true;
+    }
+  } finally {
+    lines.close();
+    file.destroy();
+  }
+
+  assert(header.startsWith('ISO-10303-21;\nHEADER;\n'), 'Missing STEP Part 21 prologue');
+  assert(header.endsWith("FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));\nENDSEC;\nDATA;\n"), 'Expected the AP214 schema and data section');
+  assert.equal(previous, 'ENDSEC;');
+  assert.equal(last, 'END-ISO-10303-21;');
+  assert(mm, 'STEP must declare a millimetre length unit');
+  const tracks = new Set([...productNames].map(name => name.replace(/ surfaces$/, '')));
+  assert.deepEqual([...tracks].sort(), [...nodeNames].sort(), 'STEP track products must match the GLB mesh nodes');
+  assert(points >= nodeNames.length * 3, 'STEP needs vertices for every track');
+  // Welding seams may discard degenerate triangles. Every flight path should
+  // retain enough facets to explain the source mesh at its exported resolution.
+  assert(faces >= sourceTriangles * 0.95 && faces <= sourceTriangles,
+    'STEP has ' + faces + ' faces for ' + sourceTriangles + ' source triangles');
+  return faces;
+}
 
 // A local clip can replace the built-in flock. The first argument can also
 // point at the deployed site to exercise exactly what a visitor receives.
@@ -99,13 +155,22 @@ try {
   const nodes = gltf.nodes.filter(node => Number.isInteger(node.mesh));
   assert.equal(nodes.length, visibleTracks, 'One GLB mesh node per exported flight path');
   assert.equal(new Set(nodes.map(node => node.name)).size, nodes.length);
+  let sourceTriangles = 0;
   for (const node of nodes) {
     const primitive = gltf.meshes[node.mesh].primitives[0];
     const positions = gltf.accessors[primitive.attributes.POSITION];
+    sourceTriangles += (primitive.indices === undefined ? positions.count : gltf.accessors[primitive.indices].count) / 3;
     assert(positions.count > 2 && positions.min.every(Number.isFinite) && positions.max.every(Number.isFinite));
   }
+  await page.getByRole('button', { name: 'Choose export format' }).click();
+  const [stepDownload] = await Promise.all([
+    page.waitForEvent('download', { timeout: 180000 }),
+    page.getByRole('menuitem', { name: 'Download STEP', exact: true }).click(),
+  ]);
+  assert.match(stepDownload.suggestedFilename(), /\.step$/i);
+  const stepFaces = await validateStep(await stepDownload.path(), nodes.map(node => node.name), sourceTriangles);
   assert.deepEqual(errors, []);
-  console.log(JSON.stringify({ url, browser: engine.name(), input: clip ?? 'Built-in flock footage', region, analysisSeconds, tracks, peak, inspected: cell, exportedPaths: nodes.length }));
+  console.log(JSON.stringify({ url, browser: engine.name(), input: clip ?? 'Built-in flock footage', region, analysisSeconds, tracks, peak, inspected: cell, exportedPaths: nodes.length, stepFaces }));
 } finally {
   await browser?.close();
   await server?.close();

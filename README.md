@@ -8,7 +8,7 @@ Open **Capture motion** to select a video, use your camera, or try the included 
 
 Switch to **Pass heat map** to see how often tracked movement enters each area of the frame. The legend shows the counts for the blue, mint, amber, and red anchors. Intermediate counts have intermediate colors, and the scale expands for busy flight corridors. Tap a cell or focus the map and use the arrow keys to read its exact count. Remaining in a cell keeps the count steady. Another track entering it, or a track leaving and returning, adds a pass.
 
-Choose **Create object** to sculpt the captured paths together. Their relative positions are preserved, with estimated depth derived from speed and apparent size. Each path becomes a separate mesh node in the exported GLB. For dense flocks, the mesh includes up to 48 of the strongest tracks. The heat map includes all confirmed passes. **View heat map** in Form controls reopens the counts for the current capture.
+Choose **Create object** to sculpt the captured paths together. Their relative positions are preserved, with estimated depth derived from speed and apparent size. Each exported path has its own GLB mesh node or named STEP part. For dense flocks, the mesh includes up to 48 of the strongest tracks. The heat map includes all confirmed passes. **View heat map** in Form controls reopens the counts for the current capture.
 
 A track is a segment of observed movement. Birds can overlap, disappear, or generate several segments. Camera motion and other moving subjects can also contribute to the map.
 
@@ -19,6 +19,7 @@ A track is a segment of observed movement. Birds can overlap, disappear, or gene
 - Select **Orbit** and drag to rotate the object. Use the camera controls to zoom or fit the view.
 - Use **Undo** and **Redo** to revisit edits during the current session.
 - **Export object** downloads the current mesh and material as a binary glTF file (`.glb`).
+- For CAD, open the arrow beside **Export object** and choose **Download STEP** (`.step`). The file stores the displayed facets and keeps separate motion tracks in their original relative positions. One studio unit is exported as one millimeter. Video captures have an estimated depth and no measured physical scale.
 
 Keyboard shortcuts include **D** for Draw, **O** for Orbit, **F** for Fit, and **Ctrl/Cmd+Z** for Undo. Add **Shift** to redo.
 
@@ -33,11 +34,11 @@ npm run dev
 
 Run `npm run build` and then `npm run preview` to serve the production build. Camera capture requires HTTPS or localhost and permission to use the camera. Supported video formats depend on the browser's installed decoders.
 
-## Check tracking
+## Test tracking and exports
 
-`npm test` checks that pausing does not add visits, a return adds another pass, and intersecting paths remain separate.
+`npm test` checks pass counts, intersecting paths, and STEP geometry, including closed solids, open surfaces, and millimeter units.
 
-The [field test results](./tests/field-results.md) include a comparison against hand-labeled birds. The browser regression follows the visitor workflow on the included [real flock footage](./media/README.md). It checks the heat map and exact cell values, undo/redo, and the exported GLB's separate mesh nodes.
+The [field test results](./tests/field-results.md) include a comparison against hand-labeled birds. The browser regression follows the visitor workflow on the included [real flock footage](./media/README.md). It checks the heat map and exact cell values, undo/redo, and the separate paths in both GLB and STEP downloads.
 
 ```sh
 npx playwright install chromium

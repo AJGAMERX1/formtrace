@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { downloadModel } from './model-export.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -178,20 +179,6 @@ function makeSculpture(points, settings = {}, live = false, paths) {
   mesh.receiveShadow = true;
   mesh.name = 'Gesture ' + (settings.shape || 'ribbon');
   return mesh;
-}
-
-// Split the display mesh back into individually selectable glTF nodes for export.
-function copyTrackGeometry(source, range) {
-  const geometry = new THREE.BufferGeometry();
-  for (const [key, attr] of Object.entries(source.attributes)) {
-    const start = range.vertexStart * attr.itemSize;
-    const end = start + range.vertexCount * attr.itemSize;
-    geometry.setAttribute(key, new THREE.BufferAttribute(attr.array.slice(start, end), attr.itemSize, attr.normalized));
-  }
-  const indices = source.index.array.slice(range.indexStart, range.indexStart + range.indexCount);
-  for (let i = 0; i < indices.length; i++) indices[i] -= range.vertexStart;
-  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
-  return geometry;
 }
 
 function disposeMesh(mesh) {
@@ -523,34 +510,11 @@ export function createScene(host, { onReady, onViewChange } = {}) {
       host.dataset.grid = String(Boolean(visible));
       host.classList.toggle('grid-hidden', !visible);
     },
-    async exportGLB(name = 'Formtrace gesture') {
-      if (!mesh) throw new Error('Draw a gesture or choose a preset before exporting.');
-      // Keep an independent snapshot while the exporter encodes it asynchronously.
-      const material = mesh.material.clone();
-      const scene = new THREE.Scene();
-      scene.name = name;
-      const tracks = mesh.userData.trackRanges;
-      for (const track of tracks) {
-        const part = tracks.length === 1 ? mesh.geometry.clone() : copyTrackGeometry(mesh.geometry, track);
-        const snapshot = new THREE.Mesh(part, material);
-        snapshot.name = tracks.length === 1 ? name : 'Motion track ' + track.id;
-        scene.add(snapshot);
-      }
-      try {
-        const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
-        const data = await new GLTFExporter().parseAsync(scene, { binary: true });
-        const url = URL.createObjectURL(new Blob([data], { type: 'model/gltf-binary' }));
-        const link = document.createElement('a');
-        link.href = url;
-        link.download = String(name).replace(/[^a-z\d._-]+/gi, '-').replace(/\.glb$/i, '') + '.glb';
-        document.body.append(link);
-        link.click();
-        link.remove();
-        setTimeout(() => URL.revokeObjectURL(url), 15000);
-      } finally {
-        for (const snapshot of scene.children) snapshot.geometry.dispose();
-        material.dispose();
-      }
+    exportGLB(name = 'Formtrace gesture') {
+      return downloadModel(mesh, 'glb', name);
+    },
+    exportSTEP(name = 'Formtrace gesture') {
+      return downloadModel(mesh, 'step', name);
     },
     dispose() {
       disposed = true;

@@ -1,4 +1,5 @@
 import './style.css';
+import { setupExportPanel } from './export-panel.js';
 import { mountIcons, icon } from './icons.js';
 import { presets, attachMotion } from './motion.js';
 import { createScene, renderPresetThumbnails } from './scene.js';
@@ -50,6 +51,7 @@ let mode = 'draw';
 let scene;
 let cleanupMotion;
 let videoPanel;
+let exportPanel;
 let panelLoading = false;
 let toastTimer;
 let exporting = false;
@@ -271,15 +273,17 @@ function setup() {
   $('#zoom-in').onclick = () => scene.zoom(1.18);
   $('#zoom-out').onclick = () => scene.zoom(1 / 1.18);
   $('#fit').onclick = () => scene.resetView();
-  $('#export').onclick = async () => {
+  async function downloadObject(format) {
     if (drawing || exporting) return;
     const button = $('#export');
     exporting = true;
     button.disabled = true;
     button.lastElementChild.textContent = 'Exporting…';
     try {
-      await scene.exportGLB('Formtrace-' + current.name.toLowerCase().replaceAll(' ', '-'));
-      notify('GLB exported');
+      const name = 'Formtrace-' + current.name.toLowerCase().replaceAll(' ', '-');
+      if (format === 'step') await scene.exportSTEP(name);
+      else await scene.exportGLB(name);
+      notify(format.toUpperCase() + ' exported');
     } catch (error) {
       console.error(error);
       notify('Export failed. Please try again.');
@@ -288,7 +292,9 @@ function setup() {
       button.lastElementChild.textContent = 'Export object';
       button.disabled = drawing;
     }
-  };
+  }
+  $('#export').onclick = () => downloadObject('glb');
+  exportPanel = setupExportPanel({ onExport: downloadObject });
   document.addEventListener('keydown', (event) => {
     if (document.querySelector('dialog[open]') || drawing || event.altKey || event.target.matches('input, textarea, [contenteditable=true]')) return;
     const key = event.key.toLowerCase();
@@ -320,6 +326,7 @@ try {
 
 if (import.meta.hot) {
   import.meta.hot.dispose(() => {
+    exportPanel?.dispose();
     videoPanel?.dispose();
     cleanupMotion?.();
     scene?.dispose();
