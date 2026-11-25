@@ -79,16 +79,22 @@ function remember(state) {
   syncHistoryButtons();
 }
 
-function drawTrace(points) {
-  const xs = points.map((p) => p[0]);
-  const ys = points.map((p) => p[1]);
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
+function drawTrace(points, tracks) {
+  const paths = tracks?.length ? tracks.map(track => track.points) : [points];
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const path of paths) {
+    for (const [x, y] of path) {
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  }
   const scale = Math.min(98 / Math.max(maxX - minX, 0.01), 34 / Math.max(maxY - minY, 0.01));
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-  const path = points.map(([x, y], i) => (i ? 'L' : 'M') +
-    (56 + (x - cx) * scale).toFixed(2) + ' ' + (21 - (y - cy) * scale).toFixed(2)).join(' ');
-  $('#trace').setAttribute('d', path);
+  const data = paths.map(path => path.map(([x, y], i) => (i ? 'L' : 'M') +
+    (56 + (x - cx) * scale).toFixed(2) + ' ' + (21 - (y - cy) * scale).toFixed(2)).join(' '));
+  $('#trace').setAttribute('d', data.join(' '));
 }
 
 function syncControls() {
@@ -112,12 +118,15 @@ function syncControls() {
     $('#' + property + '-value').value = value + '%';
   }
   $('#gesture-name').textContent = current.name;
-  drawTrace(current.points);
+  const trackCount = current.capture?.trackCount ?? 0;
+  $('#view-heatmap').hidden = !current.capture?.heatmap;
+  $('#map-track-count').textContent = trackCount + (trackCount === 1 ? ' track' : ' tracks');
+  drawTrace(current.points, current.capture?.paths);
   syncHistoryButtons();
 }
 
 function displayState() {
-  scene.setForm(current.points, current.settings);
+  scene.setForm(current.points, current.settings, { paths: current.capture?.paths });
   syncControls();
 }
 
@@ -171,8 +180,8 @@ function setup() {
       if (!videoPanel) {
         const { setupVideoPanel } = await import('./video-panel.js');
         videoPanel = setupVideoPanel({
-          onGesture(points, name) {
-            replaceState({ ...current, id: null, name: name || 'Video gesture', points });
+          onGesture(points, name, capture) {
+            replaceState({ ...current, id: null, name: name || 'Video gesture', points, capture });
             setMode('orbit');
             scene.resetView();
             notify('Motion captured');
@@ -186,6 +195,9 @@ function setup() {
     } finally {
       panelLoading = false;
     }
+  };
+  $('#view-heatmap').onclick = () => {
+    if (!drawing && current.capture?.heatmap) videoPanel.openResult(current.capture);
   };
   cleanupMotion = attachMotion(host, {
     canDraw: () => mode === 'draw' && !guide.open,
@@ -202,7 +214,7 @@ function setup() {
     },
     onFinish(points) {
       drawing = false;
-      replaceState({ ...current, points, id: null, name: 'Your gesture' });
+      replaceState({ ...current, points, capture: null, id: null, name: 'Your gesture' });
       setStatus('Ready');
       $('#export').disabled = exporting;
     },

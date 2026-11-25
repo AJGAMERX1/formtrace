@@ -88,6 +88,9 @@
           <div class="gesture-strip">
             <div class="gesture-caption"><span>Gesture path</span><small id="gesture-name">Silk loop</small></div>
             <svg class="gesture-trace" viewBox="0 0 112 42" role="img" aria-label="Current gesture path"><path id="trace" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"></path></svg>
+            <button type="button" class="heatmap-review" id="view-heatmap" aria-haspopup="dialog" hidden>
+              <span data-icon="library"></span><span>View heat map</span><small id="map-track-count"></small>
+            </button>
           </div>
         </aside>
       </div>
@@ -98,7 +101,7 @@
     </main>
     <dialog id="guide" class="help-dialog" aria-labelledby="guide-title">
       <div class="dialog-heading"><h2 id="guide-title">Quick guide</h2><button type="button" class="dialog-close icon-btn" aria-label="Close guide"><span data-icon="x"></span></button></div>
-      <div class="guide-row"><span data-icon="video"></span><div><h3>Capture a moving subject</h3><p>Open Capture motion to choose a video file or use your camera. Keep the camera still while the subject moves. The studio follows the motion and uses that path to make your form.</p></div></div>
+      <div class="guide-row"><span data-icon="video"></span><div><h3>Capture moving subjects</h3><p>Open Capture motion and choose a file or camera. Keep the camera still to follow separate flight paths. Switch to Pass heat map to see where subjects cross the same area again.</p></div></div>
       <div class="guide-row"><span data-icon="pencil"></span><div><h3>Draw a gesture</h3><p>Drag across the viewport with a mouse, pen, or finger. Your path shapes the object and your drawing speed adds depth. Release to finish.</p></div></div>
       <div class="guide-row"><span data-icon="sliders"></span><div><h3>Shape the form</h3><p>Choose a geometry and material color, then adjust width and twist. Start with a preset to experiment with a different path.</p></div></div>
       <div class="guide-row"><span data-icon="orbit"></span><div><h3>Explore and export</h3><p>Switch to Orbit and drag to rotate. Use the zoom controls for a closer look. Export object downloads your sculpture as a GLB file.</p></div></div>

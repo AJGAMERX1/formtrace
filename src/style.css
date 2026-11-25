@@ -746,3 +746,26 @@ button { border: 0; }
   .page-heading { align-items: flex-start; flex-direction: column; gap: 15px; }
   .studio-actions { width: 100%; justify-content: space-between; }
 }
+
+.heatmap-review {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 33px;
+  padding: 6px 9px;
+  margin-top: 8px;
+  border: 1px solid #d9cbe9;
+  border-radius: 6px;
+  background: #f6f1fc;
+  color: #65438e;
+  text-align: left;
+  font-size: .81rem;
+  font-weight: 580;
+}
+.heatmap-review svg { display: block; width: 14px; height: 14px; }
+.heatmap-review small { margin-left: auto; font-size: .74rem; font-weight: 450; }
+.heatmap-review:hover { background: #eee5f8; }
+@media (min-width: 376px) and (max-width: 690px) {
+  .heatmap-review { flex-wrap: wrap; }
+  .heatmap-review small { margin-left: 0; }
+}

@@ -8,7 +8,7 @@ const cameraDirection = new THREE.Vector3(0.07, 0.18, 1).normalize();
 const shortAxisSpan = 5.2;
 const clamp = THREE.MathUtils.clamp;
 
-function prepareCurve(points, live) {
+function prepareCurve(points, preserveCoordinates) {
   const vertices = [];
   for (const point of points ?? []) {
     if (!point || point.length < 2) continue;
@@ -24,7 +24,7 @@ function prepareCurve(points, live) {
   if (extent < 0.0001) return null;
   const closed = vertices.length > 4 && vertices[0].distanceTo(vertices.at(-1)) < extent * 0.005;
   if (closed) vertices.pop();
-  if (!live) {
+  if (!preserveCoordinates) {
     const midpoint = bounds.getCenter(new THREE.Vector3());
     for (const vertex of vertices) vertex.sub(midpoint).multiplyScalar(4 / extent);
   }
@@ -33,9 +33,12 @@ function prepareCurve(points, live) {
   return curve;
 }
 
-function beadGeometry(curve, width, twist) {
-  const radius = 0.07 + width * 0.35;
-  const count = clamp(Math.round(curve.getLength() / (radius * 1.48)), 2, 190);
+function beadGeometry(curve, width, twist, thickness, trackCount) {
+  const radius = (0.07 + width * 0.35) * thickness;
+  const sides = trackCount > 1 ? 12 : 20;
+  const rings = trackCount > 1 ? 8 : 12;
+  const maxBeads = Math.min(190, Math.floor(120000 / (trackCount * (sides + 1) * (rings + 1))));
+  const count = clamp(Math.round(curve.getLength() / (radius * 1.48)), 2, maxBeads);
   const frame = curve.computeFrenetFrames(count, curve.closed);
   const spheres = [];
   const matrix = new THREE.Matrix4();
@@ -52,18 +55,20 @@ function beadGeometry(curve, width, twist) {
     orientation.makeBasis(across, upright, frame.tangents[i]);
     quaternion.setFromRotationMatrix(orientation);
     matrix.compose(curve.getPointAt(i / count), quaternion, scale);
-    spheres.push(new THREE.SphereGeometry(1, 20, 12).applyMatrix4(matrix));
+    spheres.push(new THREE.SphereGeometry(1, sides, rings).applyMatrix4(matrix));
   }
   const merged = mergeGeometries(spheres);
   for (const sphere of spheres) sphere.dispose();
   return merged;
 }
 
-function sweepGeometry(curve, width, twist, ribbon, live) {
+function sweepGeometry(curve, width, twist, ribbon, live, thickness, trackCount) {
   const length = curve.getLength();
-  const folds = clamp(Math.round(length * 8), 9, 155);
-  const steps = ribbon ? folds * (live ? 4 : 6) : clamp(Math.round(length * 22), 40, 420);
-  const sides = ribbon ? 24 : 20;
+  const sides = trackCount > 1 ? 16 : (ribbon ? 24 : 20);
+  const maxSteps = Math.floor(120000 / (trackCount * sides));
+  const stepsPerFold = live ? 4 : 6;
+  const folds = clamp(Math.round(length * 8), 4, Math.min(155, Math.floor(maxSteps / stepsPerFold)));
+  const steps = ribbon ? folds * stepsPerFold : clamp(Math.round(length * 22), 24, Math.min(420, maxSteps));
   const rings = curve.closed ? steps : steps + 1;
   const positions = new Float32Array(rings * sides * 3);
   const colors = new Float32Array(positions.length);
@@ -75,7 +80,7 @@ function sweepGeometry(curve, width, twist, ribbon, live) {
   const vertex = new THREE.Vector3();
   const reference = new THREE.Vector3(0.25, 0.63, 0.9);
   const phase = Math.atan2(reference.dot(frames.binormals[0]), reference.dot(frames.normals[0]));
-  const halfWidth = ribbon ? 0.085 + width * 0.86 : 0.055 + width * 0.46;
+  const halfWidth = (ribbon ? 0.085 + width * 0.86 : 0.055 + width * 0.46) * thickness;
   for (let i = 0; i < rings; i++) {
     const t = i / steps;
     const rotation = curve.closed
@@ -129,15 +134,32 @@ function sweepGeometry(curve, width, twist, ribbon, live) {
   return geometry;
 }
 
-function makeSculpture(points, settings = {}, live = false) {
-  const curve = prepareCurve(points, live);
-  if (!curve) return null;
+function makeSculpture(points, settings = {}, live = false, paths) {
+  const tracks = paths?.length > 1 ? paths : [{ points }];
+  const thickness = tracks.length > 1 ? Math.max(0.07, 0.48 / Math.sqrt(tracks.length)) : 1;
   const width = clamp(Number(settings.width ?? 50) / 100, 0, 1);
   const twist = clamp(Number(settings.twist ?? 45) / 100, 0, 1);
   const beads = settings.shape === 'beads';
-  const geometry = beads
-    ? beadGeometry(curve, width, twist)
-    : sweepGeometry(curve, width, twist, settings.shape !== 'tube', live);
+  const parts = [];
+  const trackRanges = [];
+  let vertexStart = 0, indexStart = 0;
+  for (const track of tracks) {
+    const curve = prepareCurve(track.points, live || tracks.length > 1);
+    if (!curve) continue;
+    const part = beads ? beadGeometry(curve, width, twist, thickness, tracks.length)
+      : sweepGeometry(curve, width, twist, settings.shape !== 'tube', live, thickness, tracks.length);
+    parts.push(part);
+    const vertexCount = part.attributes.position.count, indexCount = part.index.count;
+    trackRanges.push({ id: track.id, vertexStart, vertexCount, indexStart, indexCount });
+    vertexStart += vertexCount;
+    indexStart += indexCount;
+  }
+  if (!parts.length) return null;
+  // One draw call, with disconnected surfaces in the original camera-frame coordinates.
+  const geometry = parts.length === 1 ? parts[0] : mergeGeometries(parts);
+  if (parts.length > 1) {
+    for (const part of parts) part.dispose();
+  }
   if (!live) geometry.center();
   geometry.computeBoundingBox();
   geometry.computeBoundingSphere();
@@ -151,10 +173,25 @@ function makeSculpture(points, settings = {}, live = false) {
     envMapIntensity: 0.54,
   });
   const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.trackRanges = trackRanges;
   mesh.castShadow = true;
   mesh.receiveShadow = true;
   mesh.name = 'Gesture ' + (settings.shape || 'ribbon');
   return mesh;
+}
+
+// Split the display mesh back into individually selectable glTF nodes for export.
+function copyTrackGeometry(source, range) {
+  const geometry = new THREE.BufferGeometry();
+  for (const [key, attr] of Object.entries(source.attributes)) {
+    const start = range.vertexStart * attr.itemSize;
+    const end = start + range.vertexCount * attr.itemSize;
+    geometry.setAttribute(key, new THREE.BufferAttribute(attr.array.slice(start, end), attr.itemSize, attr.normalized));
+  }
+  const indices = source.index.array.slice(range.indexStart, range.indexStart + range.indexCount);
+  for (let i = 0; i < indices.length; i++) indices[i] -= range.vertexStart;
+  geometry.setIndex(new THREE.BufferAttribute(indices, 1));
+  return geometry;
 }
 
 function disposeMesh(mesh) {
@@ -453,7 +490,7 @@ export function createScene(host, { onReady, onViewChange } = {}) {
     setForm(points, settings, options = {}) {
       const nextLive = Boolean(options.live);
       const reframe = live !== nextLive || previousPoints !== points;
-      const nextMesh = makeSculpture(points, settings, nextLive);
+      const nextMesh = makeSculpture(points, settings, nextLive, options.paths);
       disposeMesh(mesh);
       mesh = nextMesh;
       if (mesh) studio.add(mesh);
@@ -489,12 +526,18 @@ export function createScene(host, { onReady, onViewChange } = {}) {
     async exportGLB(name = 'Formtrace gesture') {
       if (!mesh) throw new Error('Draw a gesture or choose a preset before exporting.');
       // Keep an independent snapshot while the exporter encodes it asynchronously.
-      const snapshot = new THREE.Mesh(mesh.geometry.clone(), mesh.material.clone());
-      snapshot.name = name;
+      const material = mesh.material.clone();
+      const scene = new THREE.Scene();
+      scene.name = name;
+      const tracks = mesh.userData.trackRanges;
+      for (const track of tracks) {
+        const part = tracks.length === 1 ? mesh.geometry.clone() : copyTrackGeometry(mesh.geometry, track);
+        const snapshot = new THREE.Mesh(part, material);
+        snapshot.name = tracks.length === 1 ? name : 'Motion track ' + track.id;
+        scene.add(snapshot);
+      }
       try {
         const { GLTFExporter } = await import('three/addons/exporters/GLTFExporter.js');
-        const scene = new THREE.Scene();
-        scene.add(snapshot);
         const data = await new GLTFExporter().parseAsync(scene, { binary: true });
         const url = URL.createObjectURL(new Blob([data], { type: 'model/gltf-binary' }));
         const link = document.createElement('a');
@@ -505,7 +548,8 @@ export function createScene(host, { onReady, onViewChange } = {}) {
         link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 15000);
       } finally {
-        disposeMesh(snapshot);
+        for (const snapshot of scene.children) snapshot.geometry.dispose();
+        material.dispose();
       }
     },
     dispose() {

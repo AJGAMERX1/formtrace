@@ -1,6 +1,8 @@
-const SAMPLE_RATE = 12;
-const MAX_FILE_FRAMES = 600;
-const MAX_PATH_SAMPLES = 640;
+import { createDetector, createFlock, drawOverlay } from './flock-tracker.js';
+
+const FILE_SAMPLE_RATE = 30;
+const CAMERA_SAMPLE_RATE = 20;
+const MAX_FILE_FRAMES = 1800;
 const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
 
 function nextMediaEvent(video, eventName, signal) {
@@ -32,183 +34,11 @@ async function seek(video, time, signal) {
   await settled;
 }
 
-function quantile(histogram, count, fraction) {
-  let seen = 0;
-  const target = Math.max(1, Math.ceil(count * fraction));
-  for (let i = 0; i < histogram.length; i++) {
-    seen += histogram[i];
-    if (seen >= target) return i;
-  }
-  return 0;
-}
-
-// A per-channel median removes whole-frame exposure or white balance changes.
-// The remaining local motion is grouped into connected regions on a coarse grid.
-function motionDetector(video) {
-  const scale = 128 / Math.max(video.videoWidth, video.videoHeight);
-  const w = Math.max(8, 2 * Math.round(video.videoWidth * scale / 2));
-  const h = Math.max(8, 2 * Math.round(video.videoHeight * scale / 2));
-  const canvas = document.createElement('canvas');
-  canvas.width = w;
-  canvas.height = h;
-  const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  const cols = w / 2;
-  const rows = h / 2;
-  const length = w * h;
-  const scores = new Uint8Array(length);
-  const grid = new Float32Array(cols * rows);
-  const queue = new Uint16Array(grid.length);
-  let prior;
-  let background;
-  let last;
-
-  return () => {
-    ctx.drawImage(video, 0, 0, w, h);
-    const current = ctx.getImageData(0, 0, w, h).data;
-    if (!prior) {
-      prior = current;
-      background = new Float32Array(current);
-      return null;
-    }
-    const offsets = [new Uint16Array(511), new Uint16Array(511), new Uint16Array(511)];
-    let probes = 0;
-    for (let i = 0; i < length; i += 5) {
-      for (let c = 0; c < 3; c++) offsets[c][255 + current[4 * i + c] - prior[4 * i + c]]++;
-      probes++;
-    }
-    const shifts = offsets.map(hist => quantile(hist, probes, 0.5) - 255);
-    const changes = new Uint16Array(256);
-    const [redShift, greenShift, blueShift] = shifts;
-    for (let i = 0; i < length; i++) {
-      const p = 4 * i;
-      const difference = Math.max(
-        Math.abs(current[p] - prior[p] - redShift),
-        Math.abs(current[p + 1] - prior[p + 1] - greenShift),
-        Math.abs(current[p + 2] - prior[p + 2] - blueShift),
-      );
-      scores[i] = Math.min(255, difference);
-      changes[scores[i]]++;
-    }
-    const threshold = Math.max(13, quantile(changes, length, 0.60) * 2.6 + 6);
-    let moving = 0;
-    grid.fill(0);
-    for (let i = 0; i < length; i++) {
-      const p = i * 4;
-      const changed = scores[i] >= threshold;
-      let foreground = 0;
-      for (let c = 0; c < 3; c++) {
-        const bg = clamp(background[p + c] + shifts[c], 0, 255);
-        const deviation = current[p + c] - bg;
-        foreground = Math.max(foreground, Math.abs(deviation));
-        background[p + c] = bg + deviation * (changed ? 0.012 : 0.10);
-      }
-      if (changed) {
-        const cell = (Math.floor(i / w) >> 1) * cols + ((i % w) >> 1);
-        grid[cell] += scores[i] * (0.20 + Math.min(1, foreground / 52));
-        moving++;
-      }
-    }
-    prior = current;
-    if (moving < 5 || moving > 0.62 * length) return null;
-    let best = null;
-    let bestScore = 0;
-    for (let seed = 0; seed < grid.length; seed++) {
-      if (grid[seed] <= 0) continue;
-      let head = 0, tail = 1;
-      let mass = 0, sumX = 0, sumY = 0;
-      queue[0] = seed;
-      grid[seed] *= -1;
-      while (head < tail) {
-        const cell = queue[head++];
-        const x = cell % cols, y = Math.floor(cell / cols);
-        const weight = -grid[cell];
-        mass += weight;
-        sumX += (x + 0.5) * weight;
-        sumY += (y + 0.5) * weight;
-        for (let v = Math.max(0, y - 1); v <= Math.min(rows - 1, y + 1); v++) {
-          for (let u = Math.max(0, x - 1); u <= Math.min(cols - 1, x + 1); u++) {
-            const near = v * cols + u;
-            if (grid[near] > 0) {
-              grid[near] *= -1;
-              queue[tail++] = near;
-            }
-          }
-        }
-      }
-      if (tail < 3 || mass < threshold * 6) continue;
-      const x = sumX / mass / cols;
-      const y = sumY / mass / rows;
-      const continuity = last ? 1 + 0.90 * Math.exp(-7 * Math.hypot(x - last.x, y - last.y)) : 1;
-      const score = mass * continuity;
-      if (score > bestScore) {
-        best = { x, y, size: Math.sqrt(tail / grid.length) };
-        bestScore = score;
-      }
-    }
-    if (best) last = best;
-    return best;
-  };
-}
-
-function sculpturePath(samples, aspect) {
-  if (samples.length < 3) return null;
-  const first = samples[0];
-  let travel = 0;
-  let depth = 0;
-  const ranges = ['x', 'y', 'size'].map(key => {
-    const values = samples.map(p => p[key]);
-    return Math.max(...values) - Math.min(...values);
-  });
-  if (Math.max(ranges[0], ranges[1]) < 0.045 && ranges[2] < 0.06) return null;
-  const points = samples.map((p, i) => {
-    const prev = samples[Math.max(0, i - 1)];
-    const distance = Math.hypot((p.x - prev.x) * aspect, p.y - prev.y);
-    travel += distance;
-    const speed = distance / Math.max(0.04, p.t - prev.t);
-    const target = 0.19 * Math.tanh(speed) + 0.80 * (p.size - first.size) + 0.13 * Math.sin(4 * travel);
-    depth += 0.33 * (target - depth);
-    return [p.x * aspect, -p.y, depth];
-  });
-  const min = [0, 1, 2].map(c => Math.min(...points.map(p => p[c])));
-  const max = [0, 1, 2].map(c => Math.max(...points.map(p => p[c])));
-  const span = max.map((v, c) => v - min[c]);
-  const scale = 4.4 / Math.max(...span, 0.025);
-  return points.map(p => p.map((v, c) => (v - min[c] - span[c] / 2) * scale));
-}
-
-function paintTrail(overlay, samples) {
-  const ctx = overlay.getContext('2d');
-  const w = overlay.width, h = overlay.height;
-  ctx.clearRect(0, 0, w, h);
-  if (!samples.length) return;
-  const unit = Math.max(0.75, Math.min(w, h) / 350);
-  ctx.lineJoin = 'round';
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  samples.forEach((p, i) => {
-    if (i === 0) ctx.moveTo(p.x * w, p.y * h);
-    else ctx.lineTo(p.x * w, p.y * h);
-  });
-  ctx.lineWidth = 4.8 * unit;
-  ctx.strokeStyle = 'rgba(35,18,55,0.65)';
-  ctx.stroke();
-  ctx.lineWidth = 2.4 * unit;
-  ctx.strokeStyle = '#d4afff';
-  ctx.stroke();
-  const tip = samples.at(-1);
-  ctx.beginPath();
-  ctx.arc(tip.x * w, tip.y * h, 6 * unit, 0, 2 * Math.PI);
-  ctx.fillStyle = '#a26ae3';
-  ctx.fill();
-  ctx.lineWidth = 2 * unit;
-  ctx.strokeStyle = '#ffffff';
-  ctx.stroke();
-}
-
 export function createVideoTracker({ video, overlay, onProgress, onComplete, onStatus, onError }) {
   let controller = null, runController = null, fileURL = null, cameraStream = null, frame = null;
-  let source = null, phase = 'idle', clipDuration = 0, sampleCount = 0, elapsed = 0;
-  let samples = [], detector = null, captureStarted = 0, lastReported = 0;
+  let source = null, phase = 'idle', clipDuration = 0, elapsed = 0;
+  let detector = null, flock = null, state = null, frozen = null;
+  let overlayMode = 'trails', region = null, captureStarted = 0, lastReported = 0;
   let disposed = false;
   video.muted = true;
   video.playsInline = true;
@@ -247,8 +77,12 @@ export function createVideoTracker({ video, overlay, onProgress, onComplete, onS
     fileURL = null;
     source = null;
     clipDuration = 0;
-    samples = [];
-    paintTrail(overlay, samples);
+    region = null;
+    state = null;
+    flock = null;
+    frozen = null;
+    detector = null;
+    drawOverlay(overlay, state, overlayMode, frozen);
   }
 
   function reportError(err) {
@@ -324,59 +158,120 @@ export function createVideoTracker({ video, overlay, onProgress, onComplete, onS
   }
 
   function progress(fraction) {
-    onProgress?.({ phase, source, fraction, elapsed, count: sampleCount, points: samples.map(p => [p.x, p.y]) });
+    state = flock.snapshot();
+    onProgress?.({ phase, source, fraction, elapsed, ...state,
+      points: state.tracks[0]?.points.map(p => [p.x, p.y]) ?? [] });
+    drawOverlay(overlay, state, overlayMode, frozen);
   }
 
   function sample(time) {
     elapsed = time;
-    const found = detector();
-    if (!found) return;
-    const prev = samples.at(-1);
-    const x = prev ? prev.x + (found.x - prev.x) * 0.66 : found.x;
-    const y = prev ? prev.y + (found.y - prev.y) * 0.66 : found.y;
-    const size = prev ? prev.size + (found.size - prev.size) * 0.35 : found.size;
-    if (prev && Math.hypot(x - prev.x, y - prev.y) < 0.004 && Math.abs(size - prev.size) < 0.014) return;
-    if (samples.length >= MAX_PATH_SAMPLES) samples = samples.filter((_, i) => i % 2 === 0);
-    samples.push({ x, y, size, t: time });
-    sampleCount++;
-    paintTrail(overlay, samples);
+    flock.update(detector(), time);
   }
 
   function finish() {
     if (phase !== 'tracking') return;
     endRun();
-    const path = sculpturePath(samples, video.videoWidth / video.videoHeight);
-    if (!path) {
+    const paths = flock.paths();
+    if (!paths.length) {
       reportError(Error('Too little movement was detected. Try a longer gesture against a steady background.'));
       return;
     }
-    const meta = { source, duration: elapsed, count: sampleCount };
+    state = flock.snapshot();
+    const meta = { source, duration: elapsed, count: state.count, trackCount: state.trackCount,
+      exportedTrackCount: paths.length, paths, heatmap: state.heatmap, region };
     if (source === 'camera') {
-      const ctx = overlay.getContext('2d');
-      ctx.save();
-      ctx.globalCompositeOperation = 'destination-over';
-      if (video.readyState >= 2) ctx.drawImage(video, 0, 0, overlay.width, overlay.height);
-      ctx.restore();
+      if (video.readyState >= 2) {
+        frozen = document.createElement('canvas');
+        frozen.width = overlay.width;
+        frozen.height = overlay.height;
+        frozen.getContext('2d').drawImage(video, 0, 0, frozen.width, frozen.height);
+      }
       releaseCamera();
     }
+    drawOverlay(overlay, state, overlayMode, frozen);
     status('complete', 'Motion captured');
-    onComplete?.(path, meta);
+    onComplete?.(paths[0].points, meta);
+  }
+
+  function analyzeAt(time, fraction) {
+    sample(time);
+    if (fraction === 1 || performance.now()-lastReported >= 75) {
+      lastReported = performance.now();
+      progress(fraction);
+    }
+  }
+
+  // Long GOPs can require decoding the same frames repeatedly when seeking.
+  // Decode longer clips in order. A stalled decoder falls back to exact seeks
+  // from the last analyzed timestamp and preserves the paths collected so far.
+  function playFrames(signal, interval) {
+    return new Promise((resolve, reject) => {
+      let frameId, timer, last = elapsed, closed = false;
+      const previousRate = video.playbackRate;
+      function close(error) {
+        if (closed) return;
+        closed = true;
+        clearTimeout(timer);
+        if (frameId !== undefined) video.cancelVideoFrameCallback(frameId);
+        video.removeEventListener('ended', done);
+        video.removeEventListener('error', failed);
+        signal.removeEventListener('abort', abort);
+        video.pause();
+        video.playbackRate = previousRate;
+        if (error) reject(error);
+        else resolve(last);
+      }
+      function done() { close(); }
+      function failed() { close(Error('The video could not be decoded. Try a different file.')); }
+      function abort() { close(new DOMException('Cancelled', 'AbortError')); }
+      function schedule() {
+        clearTimeout(timer);
+        timer = setTimeout(done, 2300);
+        frameId = video.requestVideoFrameCallback((_, metadata) => {
+          if (closed) return;
+          try {
+            const time = metadata.mediaTime;
+            if (time-last >= interval*0.79) {
+              analyzeAt(time, Math.min(1,time/clipDuration));
+              last = time;
+            }
+            schedule();
+          } catch (error) { close(error); }
+        });
+      }
+      signal.addEventListener('abort', abort, {once:true});
+      video.addEventListener('ended', done, {once:true});
+      video.addEventListener('error', failed, {once:true});
+      if (signal.aborted) { abort(); return; }
+      video.playbackRate = video.videoWidth * video.videoHeight > 2_100_000 ? 1 : 1.5;
+      schedule();
+      video.play().catch(done);
+    });
   }
 
   async function trackFile(signal) {
-    const frames = clamp(Math.ceil(clipDuration * SAMPLE_RATE) + 1, 3, MAX_FILE_FRAMES);
-    const finalTime = Math.max(0, clipDuration - Math.min(0.02, clipDuration * 0.02));
-    for (let i = 0; i < frames; i++) {
-      const fraction = i / (frames - 1);
-      await seek(video, fraction * finalTime, signal);
+    const frames = clamp(Math.ceil(clipDuration*FILE_SAMPLE_RATE)+1, 3, MAX_FILE_FRAMES);
+    const finalTime = Math.max(0, clipDuration-Math.min(0.02,clipDuration*0.02));
+    const interval = finalTime/(frames-1);
+    await seek(video,0,signal);
+    if (signal.aborted) return;
+    analyzeAt(0,0);
+    let analyzed = 0;
+    const expensiveSeeks = clipDuration > 8 || video.videoWidth * video.videoHeight > 2_100_000;
+    if (expensiveSeeks && typeof video.requestVideoFrameCallback === 'function') {
+      analyzed = await playFrames(signal, interval);
       if (signal.aborted) return;
-      sample(fraction * finalTime);
-      if (i === frames - 1 || performance.now() - lastReported >= 75) {
-        lastReported = performance.now();
-        progress(fraction);
-      }
+    }
+    const first = Math.max(1, Math.floor(analyzed/interval)+1);
+    for (let i = first; i < frames; i++) {
+      const time = i*interval;
+      await seek(video,time,signal);
+      if (signal.aborted) return;
+      analyzeAt(time,i/(frames-1));
     }
     elapsed = clipDuration;
+    progress(1);
     finish();
   }
 
@@ -386,7 +281,7 @@ export function createVideoTracker({ video, overlay, onProgress, onComplete, onS
     function tick(now) {
       if (signal.aborted) return;
       try {
-        if (now - lastSample >= 1000 / SAMPLE_RATE && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
+        if (now - lastSample >= 1000 / CAMERA_SAMPLE_RATE && video.readyState >= 2 && video.currentTime !== lastVideoTime) {
           lastSample = now;
           lastVideoTime = video.currentTime;
           sample((now - captureStarted) / 1000);
@@ -404,14 +299,15 @@ export function createVideoTracker({ video, overlay, onProgress, onComplete, onS
     endRun();
     runController = new AbortController();
     const signal = runController.signal;
-    samples = [];
-    sampleCount = 0;
+    frozen = null;
+    state = null;
     elapsed = 0;
     lastReported = 0;
     captureStarted = performance.now();
-    paintTrail(overlay, samples);
+    drawOverlay(overlay, state, overlayMode, frozen);
     try {
-      detector = motionDetector(video);
+      detector = createDetector(video, region);
+      flock = createFlock(video.videoWidth / video.videoHeight, region);
       status('tracking', source === 'file' ? 'Tracking video…' : 'Tracking camera…');
       progress(source === 'file' ? 0 : null);
       if (source === 'file') await trackFile(signal);
@@ -427,6 +323,21 @@ export function createVideoTracker({ video, overlay, onProgress, onComplete, onS
     loadFile: file => prepare('file', file),
     startCamera: () => prepare('camera'),
     startTracking,
+    setRegion(bounds) {
+      if (disposed || !['ready', 'error'].includes(phase)) return false;
+      if (bounds === null) { region = null; return true; }
+      if (!bounds || ![bounds.x,bounds.y,bounds.width,bounds.height].every(Number.isFinite)) return false;
+      const left = clamp(bounds.x,0,1), top = clamp(bounds.y,0,1);
+      const right = clamp(bounds.x+bounds.width,0,1), bottom = clamp(bounds.y+bounds.height,0,1);
+      if (right <= left || bottom <= top) return false;
+      region = { x: left, y: top, width: right-left, height: bottom-top };
+      return true;
+    },
+    setOverlayMode(mode) {
+      if (disposed || !['trails','heatmap'].includes(mode)) return;
+      overlayMode = mode;
+      drawOverlay(overlay, state, overlayMode, frozen);
+    },
     finishTracking() { if (source === 'camera') finish(); },
     stop() { if (!disposed) { clearSource(); status('idle', ''); } },
     dispose() { if (!disposed) { disposed = true; clearSource(); phase = 'idle'; } },
