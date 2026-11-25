@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f7fa" />
+    <meta name="description" content="Turn motion from a video, live camera, or hand-drawn gesture into a 3D sculpture. Shape the result and export it directly from your browser." />
+    <link rel="icon" type="image/svg+xml" href="/formtrace.svg" />
+    <title>Formtrace · Motion studio</title>
+  </head>
+  <body>
+    <header class="app-header">
+      <div class="brand">
+        <img class="brand-mark" src="/formtrace.svg" width="35" height="35" alt="" />
+        <span class="brand-name">Formtrace</span>
+        <span class="header-divider" aria-hidden="true"></span>
+        <span class="header-context">Studio</span>
+      </div>
+      <div class="header-actions">
+        <button type="button" class="help-btn" id="help" aria-label="Quick guide"><span data-icon="book"></span><span>Quick guide</span></button>
+        <button type="button" class="export-btn" id="export"><span data-icon="download"></span><span>Export object</span></button>
+      </div>
+    </header>
+    <main class="studio">
+      <div class="page-heading">
+        <div class="heading-copy">
+          <h1>Motion studio</h1>
+          <p>Turn a video, live movement, or a drawn gesture into a sculptural 3D form.</p>
+        </div>
+        <div class="studio-actions">
+          <button type="button" class="capture-btn" id="capture-motion" aria-haspopup="dialog"><span data-icon="video"></span>Capture motion</button>
+          <div class="history-tools" role="group" aria-label="Edit history">
+            <button type="button" id="undo" class="icon-btn" title="Undo (⌘/Ctrl Z)" aria-label="Undo" disabled><span data-icon="undo"></span></button>
+            <button type="button" id="redo" class="icon-btn" title="Redo (⌘/Ctrl Shift Z)" aria-label="Redo" disabled><span data-icon="redo"></span></button>
+          </div>
+        </div>
+      </div>
+      <div class="workspace">
+        <section class="viewport" aria-label="Sculpture workspace" data-mode="draw">
+          <div class="scene-host" id="scene" tabindex="0" role="region" aria-label="Interactive 3D sculpture. Drag to draw a gesture. Use the Orbit button to rotate the sculpture."></div>
+          <div class="viewport-heading"><span data-icon="cube"></span><span>3D viewport</span></div>
+          <span class="viewport-meta">Orthographic</span>
+          <svg class="axis-gizmo" viewBox="0 0 58 54" font-family="monospace" font-size="8.5" font-weight="600" aria-hidden="true">
+            <g data-axis="Z" stroke="#8899b8" fill="#7186a4"><path stroke-width="1.5" fill="none"/><text stroke="none" text-anchor="middle" dominant-baseline="middle">Z</text></g>
+            <g data-axis="X" stroke="#c28a9a" fill="#a86b83"><path stroke-width="1.5" fill="none"/><text stroke="none" text-anchor="middle" dominant-baseline="middle">X</text></g>
+            <g data-axis="Y" stroke="#87a79f" fill="#608e7c"><path stroke-width="1.5" fill="none"/><text stroke="none" text-anchor="middle" dominant-baseline="middle">Y</text></g>
+            <circle cx="29" cy="27" r="2" fill="#827a8f"/>
+          </svg>
+          <div class="viewport-tools" role="group" aria-label="Interaction mode">
+            <button type="button" data-mode="draw" aria-pressed="true" title="Draw a gesture (D)"><span data-icon="pencil"></span>Draw</button>
+            <button type="button" data-mode="orbit" aria-pressed="false" title="Orbit the sculpture (O)"><span data-icon="orbit"></span>Orbit</button>
+          </div>
+          <div class="view-actions" role="group" aria-label="Camera">
+            <button type="button" id="zoom-out" title="Zoom out" aria-label="Zoom out"><span data-icon="minus"></span></button>
+            <button type="button" id="zoom-in" title="Zoom in" aria-label="Zoom in"><span data-icon="plus"></span></button>
+            <button type="button" id="fit" title="Fit object to view" aria-label="Fit object to view"><span data-icon="fit"></span></button>
+          </div>
+          <div class="viewport-footer">
+            <span class="viewport-instruction"><span data-icon="mouse"></span><span id="instruction">Drag in the viewport to draw</span></span>
+            <span class="viewport-state"><i class="status-dot" aria-hidden="true"></i><span id="status" role="status">Ready</span></span>
+          </div>
+        </section>
+        <aside class="inspector" aria-labelledby="form-controls">
+          <div class="panel-heading">
+            <span data-icon="sliders"></span><h2 id="form-controls">Form controls</h2>
+            <button type="button" class="reset-settings icon-btn" id="reset" title="Reset form controls" aria-label="Reset form controls"><span data-icon="reset"></span></button>
+          </div>
+          <div class="control-group geometry-control">
+            <div class="control-label" id="geometry-title">Geometry</div>
+            <div class="shape-options" role="group" aria-labelledby="geometry-title">
+              <button type="button" class="shape-btn" data-shape="ribbon" aria-pressed="true"><span data-icon="ribbon"></span><span>Ribbon</span></button>
+              <button type="button" class="shape-btn" data-shape="tube" aria-pressed="false"><span data-icon="tube"></span><span>Tube</span></button>
+              <button type="button" class="shape-btn" data-shape="beads" aria-pressed="false"><span data-icon="beads"></span><span>Beads</span></button>
+            </div>
+          </div>
+          <div class="control-group material-control">
+            <div class="material-label"><span class="control-label" id="material-title">Material color</span><span class="color-name" id="color-name">Lilac</span></div>
+            <div class="swatches" role="group" aria-labelledby="material-title" id="swatches"></div>
+          </div>
+          <div class="control-group range-controls">
+            <div class="range-field"><div class="range-label"><label for="width">Width</label><output for="width" id="width-value"></output></div>
+              <input type="range" id="width" name="width" min="0" max="100" step="1" value="50" />
+            </div>
+            <div class="range-field"><div class="range-label"><label for="twist">Twist</label><output for="twist" id="twist-value"></output></div>
+              <input type="range" id="twist" name="twist" min="0" max="100" step="1" value="45" />
+            </div>
+          </div>
+          <div class="gesture-strip">
+            <div class="gesture-caption"><span>Gesture path</span><small id="gesture-name">Silk loop</small></div>
+            <svg class="gesture-trace" viewBox="0 0 112 42" role="img" aria-label="Current gesture path"><path id="trace" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" stroke-linecap="round"></path></svg>
+          </div>
+        </aside>
+      </div>
+      <section class="library" aria-labelledby="library-title">
+        <div class="library-heading"><h2 id="library-title"><span data-icon="library"></span>Gesture library</h2><span class="library-hint">4 presets</span></div>
+        <div id="presets" class="preset-grid"></div>
+      </section>
+    </main>
+    <dialog id="guide" class="help-dialog" aria-labelledby="guide-title">
+      <div class="dialog-heading"><h2 id="guide-title">Quick guide</h2><button type="button" class="dialog-close icon-btn" aria-label="Close guide"><span data-icon="x"></span></button></div>
+      <div class="guide-row"><span data-icon="video"></span><div><h3>Capture a moving subject</h3><p>Open Capture motion to choose a video file or use your camera. Keep the camera still while the subject moves. The studio follows the motion and uses that path to make your form.</p></div></div>
+      <div class="guide-row"><span data-icon="pencil"></span><div><h3>Draw a gesture</h3><p>Drag across the viewport with a mouse, pen, or finger. Your path shapes the object and your drawing speed adds depth. Release to finish.</p></div></div>
+      <div class="guide-row"><span data-icon="sliders"></span><div><h3>Shape the form</h3><p>Choose a geometry and material color, then adjust width and twist. Start with a preset to experiment with a different path.</p></div></div>
+      <div class="guide-row"><span data-icon="orbit"></span><div><h3>Explore and export</h3><p>Switch to Orbit and drag to rotate. Use the zoom controls for a closer look. Export object downloads your sculpture as a GLB file.</p></div></div>
+      <div class="guide-shortcuts"><span><kbd>D</kbd> Draw</span><span><kbd>O</kbd> Orbit</span><span><kbd>F</kbd> Fit view</span></div>
+    </dialog>
+    <div class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
